@@ -1,0 +1,390 @@
+module code_generator (
+    input  wire clk,
+    input wire reset_n,
+    input wire enable,
+    input wire [3:0] tap1,
+    input wire [3:0] tap2,
+    output reg epoch_pulse,
+    output reg out
+);
+
+reg [10:1] G1;
+reg [10:1] G2;
+reg [9:0] epoch;
+integer i;
+
+always @(posedge clk or negedge
+reset_n) begin
+    if (!reset_n) begin
+        G1 &lt;= 10&#39;b1111111111;
+        G2 &lt;= 10&#39;b1111111111;
+        epoch&lt;= 10&#39;d0;
+        epoch_pulse&lt;=1&#39;b0;
+        out &lt;= 1&#39;b0;
+    end
+   
+    else if (enable) begin
+        if (epoch == 10&#39;d1022) begin
+
+        epoch_pulse &lt;= 1&#39;b1 ;
+        epoch &lt;= 10&#39;d0;
+        end
+        else begin
+            epoch &lt;= epoch + 1&#39;b1;
+            epoch_pulse &lt;= 0;
+        end
+
+        for (i=1; i&lt;10; i=i+1) begin
+            G1[i+1]&lt;= G1[i];
+            G2[i+1]&lt;= G2[i];
+        end
+        G1[1]&lt;=G1[10]^G1[3];
+       
+G2[1]&lt;=G2[2]^G2[3]^G2[6]^G2[8]^G2[9]
+^G2[10];
+        out &lt;= G1[10]^G2[tap1]^G2[tap2];
+    end
+    else
+        epoch_pulse &lt;= 1&#39;b0 ;
+   
+end
+endmodule
+
+module code_shift_register #(
+
+    parameter N=1023
+)(
+    input wire clk,
+    input wire codegenout,
+    input wire reset_n,
+    input wire enable,
+    output reg [N-1:0] out
+);
+
+always@(posedge clk) begin
+    if(!reset_n)
+    out&lt;=0;
+    else if (enable) begin
+        out&lt;= {out[N-2:0],codegenout};
+    end
+end
+
+endmodule
+
+`timescale 1ns/1ps
+module code_generator_tb;
+
+    reg clk;
+    reg reset_n;
+    reg enable;
+    reg [3:0] tap1;
+    reg [3:0] tap2;
+    wire epoch_pulse;
+    wire out;
+
+    code_generator dut(
+        .clk(clk),
+        .reset_n(reset_n),
+        .enable(enable),
+        .tap1(tap1),
+        .tap2(tap2),
+        .epoch_pulse(epoch_pulse),
+        .out(out)
+    );
+
+    initial begin
+        clk=0;
+        forever #5 clk=~clk;
+    end
+
+    initial begin
+
+        reset_n = 0;
+        enable =0;
+        tap1 = 4&#39;d2;
+        tap2 = 4&#39;d6;
+
+        #20;
+        reset_n=1;
+        enable=1;
+        #11000;
+        enable=0;
+        #50;
+        reset_n=1;
+        #20;
+        $display(&quot;Simulation Completed.&quot;);
+        $finish;    
+    end
+
+initial begin
+        $monitor(&quot;Time=%0t ns | rst_n=%b
+| enable=%b | out=%b |
+epoch_pulse=%b&quot;,
+        $time, reset_n, enable, out,
+epoch_pulse);
+    end
+endmodule
+
+`timescale 1ns/1ps
+module code_shift_register_tb #(
+    parameter N=8)(
+
+    );
+
+    reg clk;
+    reg codegenout;
+    reg reset_n;
+    reg enable;
+    wire [N-1:0] out;
+
+code_shift_register #(.N(N)) dut(
+    .clk(clk),
+    .codegenout(codegenout),
+    .reset_n(reset_n),
+    .enable(enable),
+    .out(out)
+);
+
+initial begin
+    clk=0;
+    forever # 5 clk=~clk;
+end
+ 
+initial begin
+    codegenout=0;
+
+    reset_n=0;
+    enable=0;
+    #20;
+   
+    reset_n=1;
+    enable=1;
+
+    @(posedge clk) codegenout = 1;
+    @(posedge clk) codegenout = 0;
+    @(posedge clk) codegenout = 1;
+    @(posedge clk) codegenout = 1;
+    @(posedge clk) codegenout = 0;
+    @(posedge clk) codegenout = 1;
+    @(posedge clk) codegenout = 0;
+    @(posedge clk) codegenout = 1;
+    @(posedge clk) codegenout = 1;
+    @(posedge clk) codegenout = 0;  
+
+    #200;
+    $display (&quot;Simulation Complete.&quot;);
+    $finish;
+end
+
+endmodule
+
+module correlator_tap (
+    input wire clk,
+
+    input wire reset_n,
+    input wire enable,
+    input wire epoch_pulse,
+    input wire code_chip,
+    input wire signed [7:0] I_in,
+    input wire signed [7:0] Q_in,
+    output reg signed [17:0] I_out,
+    output reg signed [17:0] Q_out
+);
+// first lets conver 8 bit into 18 bit signed
+wire signed [17:0] I_ext = I_in;
+wire signed [17:0] Q_ext = Q_in;
+// multiplication
+wire signed [17:0] I_corr = (code_chip == 0) ?
+I_ext : -I_ext;
+wire signed [17:0] Q_corr = (code_chip == 0) ?
+Q_ext : -Q_ext;
+// Accumulator
+reg signed [17:0] I_acc;
+reg signed [17:0] Q_acc;
+
+always @(posedge clk or negedge reset_n)
+begin
+    if (!reset_n) begin
+        I_out &lt;= 18&#39;d0;
+        Q_out &lt;= 18&#39;d0;
+        I_acc &lt;= 18&#39;d0;
+        Q_acc &lt;= 18&#39;d0;
+    end
+   
+    else if(enable) begin
+
+       
+        if(!epoch_pulse) begin
+            I_acc &lt;= I_acc + I_corr ;
+            Q_acc &lt;= Q_acc + Q_corr ;
+        end
+        else begin
+            I_out &lt;= I_acc;
+            Q_out &lt;= Q_acc;
+           
+            // Start the next 1023-chip epoch with the
+current chip
+            I_acc &lt;= I_corr;
+            Q_acc &lt;= Q_corr;
+        end
+    end
+
+    else begin
+        I_out &lt;= 18&#39;d0;
+        Q_out &lt;= 18&#39;d0;
+        I_acc &lt;= 18&#39;d0;
+        Q_acc &lt;= 18&#39;d0;
+
+        end
+    end
+endmodule
+
+module matched_filter_bank #(
+    parameter N=1023
+)(
+    input wire clk,
+    input wire reset_n,
+    input wire enable,
+    input wire [N-1:0] parallel_code,
+    input wire signed [7:0] I_in,
+    input wire signed [7:0] Q_in,
+    input wire epoch_pulse,
+    output wire [(18*N) -1:0] I_out,
+    output wire [(18*N) -1:0] Q_out
+);
+genvar i;
+generate
+for (i=0;i&lt;N;i=i+1) begin : tap_loop
+correlator_tap tap_inst(
+    .clk(clk),
+    .reset_n(reset_n),
+    .enable(enable),
+    .epoch_pulse(epoch_pulse),
+    .code_chip(parallel_code[i]),
+    .I_in(I_in),
+    .Q_in(Q_in),
+    .I_out(I_out[(i*18)+17:i*18]),
+    .Q_out(Q_out[(i*18)+17:i*18])
+);
+
+end
+endgenerate
+endmodule
+
+module power_calc_unit #(
+    parameter CORR_WIDTH = 18,
+    parameter POWER_WIDTH =
+(2*CORR_WIDTH) + 1
+)(
+    input wire clk,
+    input wire reset_n,
+    input wire enable,
+    input wire epoch_pulse,
+    input wire signed [CORR_WIDTH-1:0]
+I_in,
+    input wire signed [CORR_WIDTH-1:0]
+Q_in,
+    output reg [POWER_WIDTH-1:0]
+power_out,
+    output reg power_valid
+);
+
+localparam SQ_WIDTH =
+2*CORR_WIDTH;
+
+wire [SQ_WIDTH-1:0] I_sq = I_in*I_in;
+wire [SQ_WIDTH-1:0] Q_sq =
+Q_in*Q_in;
+wire [POWER_WIDTH-1:0] I_sq_ext =
+{{(POWER_WIDTH-SQ_WIDTH){1&#39;b0}},
+I_sq};
+wire [POWER_WIDTH-1:0] Q_sq_ext =
+{{(POWER_WIDTH-SQ_WIDTH){1&#39;b0}},
+Q_sq};
+
+reg calc_valid;
+
+always @(posedge clk or negedge
+reset_n) begin
+    if(!reset_n) begin
+       power_out &lt;=
+{POWER_WIDTH{1&#39;b0}};
+       power_valid &lt;=1&#39;b0;
+       calc_valid &lt;=1&#39;b0;
+    end
+    else if (enable) begin
+        calc_valid &lt;= epoch_pulse;
+
+        if (calc_valid) begin
+            power_out &lt;= I_sq_ext +
+Q_sq_ext;
+            power_valid &lt;=1&#39;b1;
+        end
+        else
+            power_valid &lt;=1&#39;b0;
+    end
+    else begin
+        power_out &lt;=
+{POWER_WIDTH{1&#39;b0}};
+        power_valid &lt;=1&#39;b0;
+        calc_valid &lt;=1&#39;b0;
+    end
+end
+
+endmodule
+module power_calc_bank #(
+    parameter N = 1023,
+    parameter CORR_WIDTH = 18,
+    parameter POWER_WIDTH =
+(2*CORR_WIDTH) + 1
+)(
+    input wire clk,
+    input wire reset_n,
+    input wire enable,
+    input wire epoch_pulse,
+    input wire [(CORR_WIDTH*N)-1:0] I_in,
+    input wire [(CORR_WIDTH*N)-1:0] Q_in,
+    output wire [(POWER_WIDTH*N)-1:0]
+power_out,
+    output wire power_valid
+);
+
+wire [N-1:0] power_valid_bus;
+
+genvar i;
+generate
+    for (i = 0; i &lt; N; i = i + 1) begin :
+power_loop
+        wire signed [CORR_WIDTH-1:0]
+I_slice;
+        wire signed [CORR_WIDTH-1:0]
+Q_slice;
+
+        assign I_slice =
+I_in[(i*CORR_WIDTH)+CORR_WIDTH-1 :
+i*CORR_WIDTH];
+        assign Q_slice =
+Q_in[(i*CORR_WIDTH)+CORR_WIDTH-1 :
+i*CORR_WIDTH];
+
+        power_calc_unit #(
+            .CORR_WIDTH(CORR_WIDTH),
+            .POWER_WIDTH(POWER_WIDTH)
+        ) unit_inst (
+            .clk(clk),
+            .reset_n(reset_n),
+            .enable(enable),
+            .epoch_pulse(epoch_pulse),
+            .I_in(I_slice),
+            .Q_in(Q_slice),
+           
+.power_out(power_out[(i*POWER_WIDTH)
++POWER_WIDTH-1 : i*POWER_WIDTH]),
+            .power_valid(power_valid_bus[i])
+        );
+    end
+endgenerate
+
+assign power_valid = power_valid_bus[0];
+
+endmodule
